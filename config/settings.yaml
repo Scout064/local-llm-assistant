@@ -1,0 +1,94 @@
+llm:
+  host: "http://192.168.1.x:11434"
+  model: "qwen2.5:14b"
+  system_prompt: |
+    You are a capable local assistant. You have tools registered by plugins for
+    image generation, home automation, server management, and file access.
+    Use tools when they genuinely help. Generate images when visuals enrich a response.
+    Be concise. Prefer action over explanation.
+  context_window: 8192
+  temperature: 0.7
+  max_history_messages: 40       # messages sent to Ollama per turn (full history always in DB)
+
+voice:
+  enabled: true
+  input_device: null             # null = system default; or device index/name
+  output_device: null
+
+  wake_word:
+    enabled: true
+    # Built-in names: "hey_jarvis", "alexa", "hey_mycroft", "hey_rhasspy"
+    # Custom: path to a .onnx file in wake_words/, e.g. "wake_words/my_phrase.onnx"
+    model: "hey_jarvis"
+    threshold: 0.5               # 0.0–1.0; higher = fewer false positives
+    listen_timeout: 15.0         # seconds to keep listening after wake word
+
+  stt_model: "large-v3"
+  stt_device: "cuda:0"           # "cuda:0", "cuda:1", or "cpu"
+  tts_backend: "kokoro"          # "kokoro" or "edge"
+  tts_voice: "af_heart"
+  vad_threshold: 0.5
+  silence_ms: 800
+
+persistence:
+  db_path: "./data/conversations.db"
+
+web:
+  host: "0.0.0.0"
+  port: 7860
+  log_level: "info"
+
+# ── Plugin configuration ─────────────────────────────────────────────────────
+# Each plugin reads its own section from here via plugin.config_key.
+# Keys under plugins: are free-form; each plugin defines what it expects.
+
+plugins:
+  # Directories to scan for plugins (in addition to the built-ins).
+  # Built-in plugins at plugins/builtin/ are always loaded first.
+  extra_dirs:
+    - "./plugins/community"
+
+  # Set to false to disable a specific plugin without removing it.
+  disabled: []                   # e.g. ["google_drive", "proxmox"]
+
+  comfyui:
+    host: "http://192.168.1.x:8188"
+    output_dir: "./output/images"
+    # API-format workflow JSONs. Key = alias used in the generate_image tool.
+    # Export from ComfyUI: hamburger → "Save (API Format)"
+    workflows:
+      default: "plugins/builtin/comfyui/workflows/default_txt2img.json"
+      # flux:   "plugins/builtin/comfyui/workflows/flux_schnell.json"
+    # Node IDs from your workflow JSON. Run: python scripts/inspect_workflow.py <file>
+    node_map:
+      positive_prompt: "6"
+      negative_prompt: "7"
+      sampler: "3"
+      latent_image: "5"
+      lora_loader: "10"          # omit this key entirely if your workflow has no LoRA node
+    # LoRA files must exist in ComfyUI's models/loras/ on the ComfyUI host.
+    loras:
+      - alias: "none"
+        filename: ""
+      - alias: "detail"
+        filename: "add_detail.safetensors"
+
+  homeassistant:
+    host: "http://homeassistant.local:8123"
+    token: "${HA_TOKEN}"
+
+  proxmox:
+    host: "https://proxmox.local:8006"
+    user: "root@pam"
+    token_name: "${PROXMOX_TOKEN_NAME}"
+    token_value: "${PROXMOX_TOKEN_VALUE}"
+    verify_ssl: false
+
+  google_drive:
+    credentials_file: "~/.config/assistant/gdrive_credentials.json"
+    token_file: "~/.config/assistant/gdrive_token.json"
+
+  # Community plugin example — a user-added Jellyfin plugin would go here:
+  # jellyfin:
+  #   host: "http://jellyfin.local:8096"
+  #   api_key: "${JELLYFIN_API_KEY}"

@@ -1,0 +1,15 @@
+[Unit]
+Description=Local LLM Assistant
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/user/assistant
+ExecStart=/home/user/.local/bin/uv run python -m src.main
+Restart=on-failure
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=/home/user/assistant/.env
+
+[Install]
+WantedBy=default.target

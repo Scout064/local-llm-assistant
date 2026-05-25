@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.pyo
+.env
+data/conversations.db
+output/images/
+*.egg-info/
+.venv/
+dist/
+build/
+plugins/community/*/
+!plugins/community/README.md

@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Local Assistant</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div id="app">
+        <aside id="sidebar">
+            <button id="new-chat-btn">+ New Chat</button>
+            <div id="conversation-list"></div>
+        </aside>
+        <main id="chat-area">
+            <div id="status-bar">
+                <span id="status-badge">IDLE</span>
+            </div>
+            <div id="messages"></div>
+            <div id="input-area">
+                <input type="text" id="message-input" placeholder="Send a message..." autocomplete="off">
+                <button id="send-btn">Send</button>
+                <button id="mic-btn" title="Toggle microphone">Mic</button>
+            </div>
+        </main>
+    </div>
+    <script src="/static/app.js"></script>
+</body>
+</html>
