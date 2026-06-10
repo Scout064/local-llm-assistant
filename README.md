@@ -131,7 +131,7 @@ plugins:
 Built-in models: `hey_jarvis`, `alexa`, `hey_mycroft`, `hey_rhasspy`
 
 To use a custom wake phrase:
-1. Train a model with [openwakeword](https://github.com/davidburbery/openwakeword) (see `wake_words/README.md`)
+1. Train a model with [openwakeword](https://github.com/davidburbery/openwakeword)
 2. Place the `.onnx` file in `wake_words/`
 3. Set `voice.wake_word.model` to the file path (e.g. `wake_words/my_phrase.onnx`)
 
