@@ -5,8 +5,12 @@ import re
 from pathlib import Path
 from typing import Any
 
+import structlog
 import yaml
+from pydantic import BaseModel
 from pydantic_settings import BaseSettings
+
+_log = structlog.get_logger()
 
 
 def _load_yaml() -> dict:
@@ -21,7 +25,12 @@ def _load_yaml() -> dict:
 def _substitute_env(obj):
     if isinstance(obj, str):
         def replacer(m):
-            return os.environ.get(m.group(1), m.group(0))
+            var_name = m.group(1)
+            value = os.environ.get(var_name)
+            if value is None:
+                _log.warning("env_var_not_set", variable=var_name)
+                return ""
+            return value
         return re.sub(r"\$\{(\w+)\}", replacer, obj)
     if isinstance(obj, dict):
         return {k: _substitute_env(v) for k, v in obj.items()}
@@ -30,14 +39,14 @@ def _substitute_env(obj):
     return obj
 
 
-class WakeWordSettings(BaseSettings):
+class WakeWordSettings(BaseModel):
     enabled: bool = True
     model: str = "hey_jarvis"
     threshold: float = 0.5
     listen_timeout: float = 15.0
 
 
-class VoiceSettings(BaseSettings):
+class VoiceSettings(BaseModel):
     enabled: bool = True
     input_device: int | str | None = None
     output_device: int | str | None = None
@@ -50,7 +59,7 @@ class VoiceSettings(BaseSettings):
     silence_ms: int = 800
 
 
-class LLMSettings(BaseSettings):
+class LLMSettings(BaseModel):
     host: str = "http://localhost:11434"
     model: str = "qwen2.5:14b"
     system_prompt: str = "You are a capable local assistant."
@@ -59,12 +68,12 @@ class LLMSettings(BaseSettings):
     max_history_messages: int = 40
 
 
-class LoraEntry(BaseSettings):
+class LoraEntry(BaseModel):
     alias: str = ""
     filename: str = ""
 
 
-class ComfyUISettings(BaseSettings):
+class ComfyUISettings(BaseModel):
     host: str = "http://localhost:8188"
     output_dir: str = "./output/images"
     workflows: dict[str, str] = {"default": "plugins/builtin/comfyui/workflows/default_txt2img.json"}
@@ -72,12 +81,12 @@ class ComfyUISettings(BaseSettings):
     loras: list[LoraEntry] = []
 
 
-class HomeAssistantSettings(BaseSettings):
+class HomeAssistantSettings(BaseModel):
     host: str = "http://homeassistant.local:8123"
     token: str = ""
 
 
-class ProxmoxSettings(BaseSettings):
+class ProxmoxSettings(BaseModel):
     host: str = "https://proxmox.local:8006"
     user: str = "root@pam"
     token_name: str = ""
@@ -85,12 +94,12 @@ class ProxmoxSettings(BaseSettings):
     verify_ssl: bool = False
 
 
-class GoogleDriveSettings(BaseSettings):
+class GoogleDriveSettings(BaseModel):
     credentials_file: str = "~/.config/assistant/gdrive_credentials.json"
     token_file: str = "~/.config/assistant/gdrive_token.json"
 
 
-class PluginSettings(BaseSettings):
+class PluginSettings(BaseModel):
     extra_dirs: list[str] = ["./plugins/community"]
     disabled: list[str] = []
     comfyui: ComfyUISettings = ComfyUISettings()
@@ -99,14 +108,15 @@ class PluginSettings(BaseSettings):
     google_drive: GoogleDriveSettings = GoogleDriveSettings()
 
 
-class PersistenceSettings(BaseSettings):
+class PersistenceSettings(BaseModel):
     db_path: str = "./data/conversations.db"
 
 
-class WebSettings(BaseSettings):
+class WebSettings(BaseModel):
     host: str = "0.0.0.0"
     port: int = 7860
     log_level: str = "info"
+    api_key: str = ""
 
 
 class Settings(BaseSettings):

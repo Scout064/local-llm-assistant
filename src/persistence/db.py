@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import aiosqlite
@@ -31,22 +32,30 @@ CREATE INDEX IF NOT EXISTS idx_messages_conversation
 """
 
 _db: aiosqlite.Connection | None = None
+_db_lock = asyncio.Lock()
 
 
 async def init_db() -> aiosqlite.Connection:
     global _db
-    db_path = Path(settings.persistence.db_path)
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    _db = await aiosqlite.connect(str(db_path))
-    _db.row_factory = aiosqlite.Row
-    await _db.executescript(_SCHEMA)
-    await _db.commit()
-    return _db
+    async with _db_lock:
+        if _db is not None:
+            return _db
+        db_path = Path(settings.persistence.db_path)
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        _db = await aiosqlite.connect(str(db_path))
+        _db.row_factory = aiosqlite.Row
+        await _db.executescript(_SCHEMA)
+        await _db.commit()
+        return _db
 
 
 async def get_db() -> aiosqlite.Connection:
-    if _db is None:
-        return await init_db()
+    global _db
+    if _db is not None:
+        return _db
+    async with _db_lock:
+        if _db is None:
+            await init_db()
     return _db
 
 

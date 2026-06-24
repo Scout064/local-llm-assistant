@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import copy
 import json
+import random
 import time
 from pathlib import Path
 from uuid import uuid4
@@ -45,8 +47,6 @@ class ComfyUIService:
             "positive_prompt": (["text"], params.get("prompt")),
             "negative_prompt": (["text"], params.get("negative_prompt")),
             "sampler":         (["steps"], params.get("steps")),
-            "latent_image":    (["width"], params.get("width")),
-            "latent_image":    (["height"], params.get("height")),
         }
 
         for map_key, (input_keys, value) in fields.items():
@@ -54,6 +54,13 @@ class ComfyUIService:
                 node = wf[node_map[map_key]]["inputs"]
                 for k in input_keys:
                     node[k] = value
+
+        if "latent_image" in node_map:
+            latent_inputs = wf[node_map["latent_image"]]["inputs"]
+            if params.get("width") is not None:
+                latent_inputs["width"] = params["width"]
+            if params.get("height") is not None:
+                latent_inputs["height"] = params["height"]
 
         if "sampler" in node_map:
             sampler_inputs = wf[node_map["sampler"]]["inputs"]
@@ -63,8 +70,7 @@ class ComfyUIService:
                 sampler_inputs["cfg"] = params["cfg"]
             if "seed" in params:
                 sampler_inputs["seed"] = params["seed"]
-            if "seed" not in params:
-                import random
+            else:
                 sampler_inputs["seed"] = random.randint(0, 2**32 - 1)
 
         if "lora_loader" in node_map:
@@ -112,7 +118,6 @@ class ComfyUIService:
         prompt_id = prompt_data["prompt_id"]
 
         for _ in range(120):
-            import asyncio
             await asyncio.sleep(0.5)
             history_resp = await self.client.get(f"{self.host}/history/{prompt_id}")
             history = history_resp.json()
@@ -146,8 +151,6 @@ class ComfyUIService:
         raise RuntimeError("No images found in ComfyUI output")
 
     async def _download_image(self, url: str, prompt_id: str, filename: str) -> Path | None:
-        import asyncio
-
         self.output_dir.mkdir(parents=True, exist_ok=True)
         for attempt in range(5):
             try:

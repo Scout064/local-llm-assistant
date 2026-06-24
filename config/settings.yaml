@@ -37,6 +37,7 @@ web:
   host: "0.0.0.0"
   port: 7860
   log_level: "info"
+  api_key: "${ASSISTANT_API_KEY}"   # set a shared secret to require X-API-Key header on HTTP and ?key= on WS; leave empty for no auth
 
 # ── Plugin configuration ─────────────────────────────────────────────────────
 # Each plugin reads its own section from here via plugin.config_key.

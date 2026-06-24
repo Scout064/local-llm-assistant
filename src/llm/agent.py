@@ -54,7 +54,12 @@ async def run(
     max_history = settings.llm.max_history_messages
     if len(messages) > max_history + 1:
         system_msg = messages[0]
-        messages = [system_msg] + messages[-(max_history):]
+        trimmed = messages[-(max_history):]
+        while trimmed and trimmed[0].get("role") == "tool":
+            trimmed = trimmed[1:]
+        while trimmed and trimmed[-1].get("tool_calls") and not trimmed[-1].get("content"):
+            trimmed = trimmed[:-1]
+        messages = [system_msg] + trimmed
 
     tool_schemas = registry.get_ollama_tool_schemas()
     ollama_tools = tool_schemas if tool_schemas else None
@@ -74,10 +79,9 @@ async def run(
                 tool_call = item
                 break
 
-        if text_in_this_turn:
-            await add_message(conversation_id, "assistant", text_in_this_turn)
-
         if tool_call is None:
+            if text_in_this_turn:
+                await add_message(conversation_id, "assistant", text_in_this_turn)
             break
 
         # Execute tool
@@ -94,10 +98,6 @@ async def run(
 
         yield AgentEvent("tool_done", tool=tool_call.name, result=result)
 
-        # Inject result and continue
-        await add_message(conversation_id, "tool", str(result), tool_name=tool_call.name)
-        messages.append({"role": "tool", "content": str(result), "name": tool_call.name})
-
         tool_call_json = json.dumps({
             "function": {"name": tool_call.name, "arguments": tool_call.arguments}
         })
@@ -107,6 +107,19 @@ async def run(
             text_in_this_turn or "",
             tool_call_json=tool_call_json,
         )
+        await add_message(conversation_id, "tool", str(result), tool_name=tool_call.name)
+
+        messages.append({
+            "role": "assistant",
+            "content": text_in_this_turn or "",
+            "tool_calls": [{"function": {"name": tool_call.name, "arguments": tool_call.arguments}}],
+        })
+        messages.append({"role": "tool", "content": str(result), "name": tool_call.name})
+
+    else:
+        msg = "[Assistant reached maximum tool-call depth and stopped.]"
+        await add_message(conversation_id, "assistant", msg)
+        yield msg
 
     if needs_title:
         await _auto_title(conversation_id, user_message, client)

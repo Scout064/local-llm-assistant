@@ -6,8 +6,9 @@ from pathlib import Path
 from typing import Set
 
 import structlog
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Request
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Request, HTTPException, Depends, Security
 from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.security import APIKeyHeader
 from fastapi.staticfiles import StaticFiles
 
 from src.config import settings
@@ -32,6 +33,14 @@ websocket_connections: dict[str, Set[WebSocket]] = defaultdict(set)
 
 STATIC_DIR = Path(__file__).parent / "static"
 
+API_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+
+async def verify_api_key(api_key: str = Security(API_KEY_HEADER)):
+    expected = settings.web.api_key
+    if expected and api_key != expected:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
 
 def _get_registry(request: Request) -> PluginRegistry:
     return request.app.state.registry
@@ -42,13 +51,13 @@ async def index():
     return (STATIC_DIR / "index.html").read_text()
 
 
-@router.get("/conversations")
+@router.get("/conversations", dependencies=[Depends(verify_api_key)])
 async def api_list_conversations():
     convs = await list_conversations(include_deleted=False)
     return convs
 
 
-@router.post("/conversations")
+@router.post("/conversations", dependencies=[Depends(verify_api_key)])
 async def api_create_conversation(request: Request):
     body = await request.json() if await request.body() else {}
     title = body.get("title", "New conversation")
@@ -58,7 +67,7 @@ async def api_create_conversation(request: Request):
     return conv
 
 
-@router.put("/conversations/{conversation_id}/title")
+@router.put("/conversations/{conversation_id}/title", dependencies=[Depends(verify_api_key)])
 async def api_update_title(conversation_id: str, request: Request):
     body = await request.json()
     title = body.get("title", "New conversation")
@@ -67,19 +76,19 @@ async def api_update_title(conversation_id: str, request: Request):
     return {"status": "ok"}
 
 
-@router.delete("/conversations/{conversation_id}")
+@router.delete("/conversations/{conversation_id}", dependencies=[Depends(verify_api_key)])
 async def api_delete_conversation(conversation_id: str):
     await soft_delete_conversation(conversation_id)
     return {"status": "ok"}
 
 
-@router.get("/conversations/{conversation_id}/messages")
+@router.get("/conversations/{conversation_id}/messages", dependencies=[Depends(verify_api_key)])
 async def api_get_messages(conversation_id: str):
     msgs = await get_messages(conversation_id)
     return msgs
 
 
-@router.get("/plugins")
+@router.get("/plugins", dependencies=[Depends(verify_api_key)])
 async def api_plugins(request: Request):
     registry = _get_registry(request)
     return registry.get_status()
@@ -87,6 +96,11 @@ async def api_plugins(request: Request):
 
 @router.websocket("/ws/{conversation_id}")
 async def websocket_endpoint(websocket: WebSocket, conversation_id: str):
+    if settings.web.api_key:
+        key = websocket.query_params.get("key", "")
+        if key != settings.web.api_key:
+            await websocket.close(code=4001, reason="Unauthorized")
+            return
     await websocket.accept()
     websocket_connections[conversation_id].add(websocket)
     registry = _get_registry(websocket.app)
@@ -166,17 +180,28 @@ async def broadcast(conversation_id: str, message: dict):
 
 
 async def broadcast_global(message: dict):
-    for ws_set in websocket_connections.values():
-        for ws in ws_set:
-            try:
-                await ws.send_json(message)
-            except Exception:
-                pass
+    all_sockets = [
+        (ws, conv_id)
+        for conv_id, ws_set in list(websocket_connections.items())
+        for ws in list(ws_set)
+    ]
+    for ws, conv_id in all_sockets:
+        try:
+            await ws.send_json(message)
+        except Exception:
+            websocket_connections.get(conv_id, set()).discard(ws)
 
 
 @router.get("/output/images/{filename}")
 async def serve_image(filename: str):
-    image_path = Path(settings.plugins.comfyui.output_dir) / filename
-    if not image_path.exists():
-        return {"error": "not found"}
-    return FileResponse(str(image_path), media_type="image/png")
+    import mimetypes
+    output_dir = Path(settings.plugins.comfyui.output_dir).resolve()
+    image_path = (output_dir / filename).resolve()
+    try:
+        image_path.relative_to(output_dir)
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Access denied")
+    if not image_path.exists() or not image_path.is_file():
+        raise HTTPException(status_code=404, detail="Image not found")
+    media_type, _ = mimetypes.guess_type(str(image_path))
+    return FileResponse(str(image_path), media_type=media_type or "image/png")

@@ -1,6 +1,7 @@
 import importlib
 import importlib.util
 import inspect
+import sys
 from pathlib import Path
 
 from src.plugins.base import Plugin
@@ -41,9 +42,15 @@ def discover_plugins(directories: list[Path]) -> list[type[Plugin]]:
 
 
 def _load_plugin_class(plugin_file: Path, dir_name: str) -> type[Plugin] | None:
-    module_name = f"plugins.{dir_name}.plugin"
+    try:
+        rel = plugin_file.resolve().relative_to(Path(".").resolve())
+        module_name = ".".join(rel.with_suffix("").parts)
+    except ValueError:
+        module_name = f"plugins.{dir_name}.plugin"
+
     spec = importlib.util.spec_from_file_location(module_name, plugin_file)
     module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
     spec.loader.exec_module(module)
 
     # Prefer explicit PLUGIN_CLASS export
