@@ -36,17 +36,7 @@ _db_lock = asyncio.Lock()
 
 
 async def init_db() -> aiosqlite.Connection:
-    global _db
-    async with _db_lock:
-        if _db is not None:
-            return _db
-        db_path = Path(settings.persistence.db_path)
-        db_path.parent.mkdir(parents=True, exist_ok=True)
-        _db = await aiosqlite.connect(str(db_path))
-        _db.row_factory = aiosqlite.Row
-        await _db.executescript(_SCHEMA)
-        await _db.commit()
-        return _db
+    return await get_db()
 
 
 async def get_db() -> aiosqlite.Connection:
@@ -54,9 +44,16 @@ async def get_db() -> aiosqlite.Connection:
     if _db is not None:
         return _db
     async with _db_lock:
-        if _db is None:
-            await init_db()
-    return _db
+        if _db is not None:
+            return _db
+        db_path = Path(settings.persistence.db_path)
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        _db = await aiosqlite.connect(str(db_path))
+        _db.row_factory = aiosqlite.Row
+        await _db.execute("PRAGMA foreign_keys = ON")
+        await _db.executescript(_SCHEMA)
+        await _db.commit()
+        return _db
 
 
 async def close_db() -> None:

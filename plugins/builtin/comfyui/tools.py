@@ -79,6 +79,9 @@ def generate_image_tool(plugin):
                 lora_filename = lora["filename"]
                 break
 
+        if not lora_filename:
+            lora_strength = 0.0
+
         result = await plugin.service.generate_image(
             workflow=workflow,
             node_map=plugin.node_map,

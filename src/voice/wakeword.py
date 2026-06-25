@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import time
 
 import structlog
 
@@ -20,12 +21,12 @@ class WakeWordListener:
         self.detected_event = detected_event
         self._running = False
         self._model = None
+        self.cooldown_until: float = 0.0
 
     def load(self):
         from openwakeword.model import Model
 
         model_path = settings.voice.wake_word.model
-        # openwakeword accepts both built-in names and .onnx file paths
         self._model = Model(wakeword_models=[model_path])
         logger.info("wakeword_model_loaded", model=model_path)
 
@@ -42,7 +43,7 @@ class WakeWordListener:
         import numpy as np
         import sounddevice as sd
 
-        chunk_size = 1280   # 80ms at 16kHz; openwakeword expects 16kHz int16
+        chunk_size = 1280
 
         try:
             with sd.InputStream(
@@ -57,7 +58,8 @@ class WakeWordListener:
                     prediction = self._model.predict(chunk.flatten().astype(np.int16))
                     score = max(prediction.values()) if prediction else 0.0
                     if score >= settings.voice.wake_word.threshold:
-                        logger.info("wakeword_detected", score=score)
-                        loop.call_soon_threadsafe(self.detected_event.set)
+                        if time.time() >= self.cooldown_until:
+                            logger.info("wakeword_detected", score=score)
+                            loop.call_soon_threadsafe(self.detected_event.set)
         except Exception as e:
             logger.error("wakeword_listener_error", error=str(e))

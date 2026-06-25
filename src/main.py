@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 
 import structlog
 from fastapi import FastAPI
@@ -64,6 +65,9 @@ async def _wakeword_loop(detected_event: asyncio.Event):
         detected_event.clear()
         logger.info("wakeword_triggered")
 
+        if wakeword_listener:
+            wakeword_listener.cooldown_until = time.time() + settings.voice.wake_word.listen_timeout
+
         await broadcast_global({"type": "status", "state": "WAKE_WORD_DETECTED"})
 
         audio = await asyncio.to_thread(record_until_silence)
@@ -83,7 +87,19 @@ async def _wakeword_loop(detected_event: asyncio.Event):
             continue
 
         await broadcast_global({"type": "voice_transcribed", "text": text})
+
+        if settings.voice.enabled and settings.voice.tts_backend:
+            await _queue_tts(text)
+
         logger.info("voice_input_ready", text=text)
+
+
+async def _queue_tts(text: str):
+    try:
+        from src.voice.tts import synthesize_and_queue
+        await asyncio.to_thread(synthesize_and_queue, text)
+    except Exception as e:
+        logger.debug("tts_queue_error", error=str(e))
 
 
 @asynccontextmanager

@@ -1,9 +1,17 @@
 from __future__ import annotations
 
+import re
+
 import httpx
 import structlog
 
+from src.plugins.base import Plugin, ToolDefinition
+
 log = structlog.get_logger()
+
+_ENTITY_RE = re.compile(r"^[a-z_]+\.[a-z0-9_]+$")
+_DOMAIN_RE = re.compile(r"^[a-z_]+$")
+_SERVICE_RE = re.compile(r"^[a-z_]+$")
 
 
 class HomeAssistantService:
@@ -32,6 +40,8 @@ class HomeAssistantService:
             return False
 
     async def get_entity_state(self, entity_id: str) -> dict:
+        if not _ENTITY_RE.match(entity_id):
+            raise ValueError(f"Invalid entity_id: {entity_id}")
         resp = await self.client.get(f"{self.host}/api/states/{entity_id}")
         resp.raise_for_status()
         return resp.json()
@@ -39,6 +49,12 @@ class HomeAssistantService:
     async def call_service(
         self, domain: str, service: str, entity_id: str, data: dict | None = None
     ) -> dict:
+        if not _DOMAIN_RE.match(domain):
+            raise ValueError(f"Invalid domain: {domain}")
+        if not _SERVICE_RE.match(service):
+            raise ValueError(f"Invalid service: {service}")
+        if entity_id and not _ENTITY_RE.match(entity_id):
+            raise ValueError(f"Invalid entity_id: {entity_id}")
         payload = {"entity_id": entity_id}
         if data:
             payload.update(data)

@@ -43,10 +43,6 @@ class OllamaClient:
             model_names = [m.model for m in models.models]
             configured = settings.llm.model
             if configured not in model_names:
-                for name in model_names:
-                    if name.startswith(configured.split(":")[0]):
-                        logger.warning("model_variant_found", configured=configured, available=name)
-                        return True
                 logger.error(
                     "model_not_found",
                     configured=configured,
@@ -68,6 +64,10 @@ class OllamaClient:
             "model": settings.llm.model,
             "messages": messages,
             "stream": True,
+            "options": {
+                "temperature": settings.llm.temperature,
+                "num_ctx": settings.llm.context_window,
+            },
         }
         if tools:
             kwargs["tools"] = tools
@@ -92,6 +92,10 @@ class OllamaClient:
             model=settings.llm.model,
             messages=messages,
             stream=False,
+            options={
+                "temperature": settings.llm.temperature,
+                "num_ctx": settings.llm.context_window,
+            },
         )
         return response.message.content or ""
 

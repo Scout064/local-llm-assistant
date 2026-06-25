@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import AsyncIterator
 
 import structlog
@@ -12,6 +13,7 @@ from src.persistence.conversations import (
     add_message,
     get_messages,
     update_conversation_title,
+    get_conversation,
 )
 
 logger = structlog.get_logger()
@@ -36,12 +38,16 @@ async def run(
             messages.append({"role": "user", "content": msg["content"]})
         elif msg["role"] == "assistant":
             if msg.get("tool_call_json"):
-                tool_call_data = json.loads(msg["tool_call_json"])
-                messages.append({
-                    "role": "assistant",
-                    "content": msg["content"] or "",
-                    "tool_calls": [tool_call_data],
-                })
+                try:
+                    tool_call_data = json.loads(msg["tool_call_json"])
+                    messages.append({
+                        "role": "assistant",
+                        "content": msg["content"] or "",
+                        "tool_calls": [tool_call_data],
+                    })
+                except (json.JSONDecodeError, TypeError):
+                    logger.warning("malformed_tool_call_json", msg_id=msg["id"])
+                    messages.append({"role": "assistant", "content": msg["content"] or ""})
             else:
                 messages.append({"role": "assistant", "content": msg["content"]})
         elif msg["role"] == "tool":
@@ -64,57 +70,61 @@ async def run(
     tool_schemas = registry.get_ollama_tool_schemas()
     ollama_tools = tool_schemas if tool_schemas else None
 
-    needs_title = len([m for m in raw_messages if m["role"] == "user"]) == 1
+    conv = await get_conversation(conversation_id)
+    needs_title = (
+        len([m for m in raw_messages if m["role"] == "user"]) == 1
+        and conv is not None
+        and conv["title"] == "New conversation"
+    )
 
     max_iterations = 10
     for _ in range(max_iterations):
         text_in_this_turn = ""
-        tool_call = None
+        tool_calls_in_turn: list[ToolCall] = []
 
         async for item in client.chat_stream(messages, tools=ollama_tools):
             if isinstance(item, str):
                 text_in_this_turn += item
                 yield item
             elif isinstance(item, ToolCall):
-                tool_call = item
-                break
+                tool_calls_in_turn.append(item)
 
-        if tool_call is None:
+        if not tool_calls_in_turn:
             if text_in_this_turn:
                 await add_message(conversation_id, "assistant", text_in_this_turn)
             break
 
-        # Execute tool
-        yield AgentEvent("tool_start", tool=tool_call.name)
+        for tc in tool_calls_in_turn:
+            yield AgentEvent("tool_start", tool=tc.name)
 
-        handler = registry.get_tool_handler(tool_call.name)
-        if handler is None:
-            result = f"Error: tool '{tool_call.name}' not found"
-        else:
-            try:
-                result = await handler(**tool_call.arguments)
-            except Exception as exc:
-                result = f"Error: {exc}"
+            handler = registry.get_tool_handler(tc.name)
+            if handler is None:
+                result = f"Error: tool '{tc.name}' not found"
+            else:
+                try:
+                    result = await handler(**tc.arguments)
+                except Exception as exc:
+                    result = f"Error: {exc}"
 
-        yield AgentEvent("tool_done", tool=tool_call.name, result=result)
+            yield AgentEvent("tool_done", tool=tc.name, result=result)
 
-        tool_call_json = json.dumps({
-            "function": {"name": tool_call.name, "arguments": tool_call.arguments}
-        })
-        await add_message(
-            conversation_id,
-            "assistant",
-            text_in_this_turn or "",
-            tool_call_json=tool_call_json,
-        )
-        await add_message(conversation_id, "tool", str(result), tool_name=tool_call.name)
+            tool_call_json = json.dumps({
+                "function": {"name": tc.name, "arguments": tc.arguments}
+            })
+            await add_message(
+                conversation_id, "assistant",
+                text_in_this_turn or "",
+                tool_call_json=tool_call_json,
+            )
+            await add_message(conversation_id, "tool", str(result), tool_name=tc.name)
 
-        messages.append({
-            "role": "assistant",
-            "content": text_in_this_turn or "",
-            "tool_calls": [{"function": {"name": tool_call.name, "arguments": tool_call.arguments}}],
-        })
-        messages.append({"role": "tool", "content": str(result), "name": tool_call.name})
+            messages.append({
+                "role": "assistant",
+                "content": text_in_this_turn or "",
+                "tool_calls": [{"function": {"name": tc.name, "arguments": tc.arguments}}],
+            })
+            messages.append({"role": "tool", "content": str(result), "name": tc.name})
+            text_in_this_turn = ""
 
     else:
         msg = "[Assistant reached maximum tool-call depth and stopped.]"
@@ -131,8 +141,10 @@ async def _auto_title(conversation_id: str, user_message: str, client: OllamaCli
         {"role": "user", "content": user_message},
     ]
     title = await client.chat_no_stream(title_messages)
-    title = title.strip().strip('"').strip("'")
+    title = re.sub(r"[*_#`\n\r\t]+", " ", title).strip().strip('"').strip("'").strip()
     if title:
         await update_conversation_title(conversation_id, title)
+        from src.web.routes import broadcast_global
+        await broadcast_global({"type": "conversation_titled", "id": conversation_id, "title": title})
         return title
     return None

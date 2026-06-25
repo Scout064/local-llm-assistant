@@ -4,7 +4,10 @@ import asyncio
 import structlog
 from proxmoxer import ProxmoxAPI
 
-from src.plugins.base import Plugin, ToolDefinition
+try:
+    from proxmoxer.core import ResourceException as _ProxmoxResourceError
+except ImportError:
+    _ProxmoxResourceError = Exception
 
 log = structlog.get_logger()
 
@@ -62,9 +65,15 @@ class ProxmoxService:
                     status = self.proxmox.nodes(node).qemu(vmid).status.current.get()
                     status["node"] = node
                     return status
-                except Exception:
-                    continue
-            return {"error": f"VM {vmid} not found"}
+                except _ProxmoxResourceError as e:
+                    if "not found" in str(e).lower():
+                        continue
+                    log.error("proxmox_api_error", vmid=vmid, error=str(e))
+                    return {"error": f"Proxmox API error: {e}"}
+                except Exception as e:
+                    log.error("proxmox_unexpected_error", vmid=vmid, error=str(e))
+                    return {"error": f"Unexpected error: {e}"}
+            return {"error": f"VM {vmid} not found on any node"}
         return await asyncio.to_thread(_status)
 
     async def start_vm(self, vmid: int) -> str:
@@ -75,8 +84,12 @@ class ProxmoxService:
                 try:
                     self.proxmox.nodes(node).qemu(vmid).status.start.post()
                     return f"VM {vmid} start initiated on {node}"
-                except Exception:
-                    continue
+                except _ProxmoxResourceError as e:
+                    if "not found" in str(e).lower():
+                        continue
+                    return f"Error: Proxmox API error: {e}"
+                except Exception as e:
+                    return f"Error: Unexpected error: {e}"
             return f"Error: VM {vmid} not found"
         return await asyncio.to_thread(_start)
 
@@ -88,7 +101,11 @@ class ProxmoxService:
                 try:
                     self.proxmox.nodes(node).qemu(vmid).status.stop.post()
                     return f"VM {vmid} stop initiated on {node}"
-                except Exception:
-                    continue
+                except _ProxmoxResourceError as e:
+                    if "not found" in str(e).lower():
+                        continue
+                    return f"Error: Proxmox API error: {e}"
+                except Exception as e:
+                    return f"Error: Unexpected error: {e}"
             return f"Error: VM {vmid} not found"
         return await asyncio.to_thread(_stop)

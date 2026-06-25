@@ -45,6 +45,9 @@ async def list_conversations(include_deleted: bool = False) -> list[dict]:
 
 
 async def update_conversation_title(conversation_id: str, title: str) -> None:
+    title = title[:256].strip()
+    if not title:
+        title = "New conversation"
     db = await get_db()
     now = datetime.now(timezone.utc).isoformat()
     await db.execute(

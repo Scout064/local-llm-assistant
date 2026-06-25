@@ -92,55 +92,106 @@ PLUGIN_CLASS = StubPlugin
         assert len(found) == 0
 
 
-class TestPluginRegistry:
+class TestPluginRegistryHealthCheck:
     @pytest.mark.asyncio
-    async def test_health_check_failure_graceful_skip(self):
+    async def test_unhealthy_plugin_excluded_from_tools(self, tmp_path):
+        """A plugin whose health_check returns False should be registered
+        for status but NOT contribute tools."""
         from src.plugins.registry import PluginRegistry
-        from src.config import settings
+
+        unhealthy_dir = tmp_path / "unhealthy_svc"
+        unhealthy_dir.mkdir()
+        (unhealthy_dir / "__init__.py").write_text("")
+        (unhealthy_dir / "plugin.py").write_text('''
+from src.plugins.base import Plugin, ToolDefinition
+
+class UnhealthyPlugin(Plugin):
+    name = "unhealthy_svc"
+    display_name = "Unhealthy Service"
+    config_key = None
+    async def setup(self, config): pass
+    async def health_check(self): return False
+    def get_tools(self):
+        return [ToolDefinition(
+            schema={"type": "function", "function": {"name": "unhealthy_action", "parameters": {"type": "object", "properties": {}}}},
+            handler=self._handler,
+        )]
+    async def _handler(self): return "ok"
+
+PLUGIN_CLASS = UnhealthyPlugin
+''')
 
         registry = PluginRegistry()
+        original_discover = sys.modules["src.plugins.registry"].discover_plugins
+        sys.modules["src.plugins.registry"].discover_plugins = lambda dirs: discover_plugins([tmp_path])
+        try:
+            from src.config import settings
+            await registry.load_all(settings)
+        finally:
+            sys.modules["src.plugins.registry"].discover_plugins = original_discover
 
-        unhealthy_plugin_dir = Path("plugins/builtin")
-        # The built-in plugins will try health checks against real services.
-        # Most will fail in a test environment. The key test is that
-        # the registry does not crash when health checks fail.
-        await registry.load_all(settings)
-
-        # At minimum, unhealthy plugins should be tracked
+        assert "unhealthy_svc" in registry._failed
+        assert len(registry.get_all_tools()) == 0
         status = registry.get_status()
-        assert isinstance(status, list)
+        assert len(status) == 1
+        assert status[0]["status"] == "unhealthy"
 
+
+class TestPluginRegistryToolDedup:
     @pytest.mark.asyncio
-    async def test_tool_name_uniqueness(self):
-        from src.plugins.base import Plugin, ToolDefinition
+    async def test_duplicate_tool_name_across_plugins_filtered(self, tmp_path):
+        """When two plugins define a tool with the same name, only the first is kept."""
         from src.plugins.registry import PluginRegistry
 
-        class PluginA(Plugin):
-            name = "plug_a"
-            display_name = "A"
-            async def setup(self, config): pass
-            async def health_check(self): return True
-            def get_tools(self):
-                return [ToolDefinition(
-                    schema={"type": "function", "function": {"name": "shared_action", "parameters": {"type": "object", "properties": {}}}},
-                    handler=self._handler
-                )]
-            async def _handler(self): return "ok"
+        plug_a_dir = tmp_path / "plug_a"
+        plug_a_dir.mkdir()
+        (plug_a_dir / "__init__.py").write_text("")
+        (plug_a_dir / "plugin.py").write_text('''
+from src.plugins.base import Plugin, ToolDefinition
+class PlugA(Plugin):
+    name = "plug_a"
+    display_name = "A"
+    config_key = None
+    async def setup(self, config): pass
+    async def health_check(self): return True
+    def get_tools(self):
+        return [ToolDefinition(
+            schema={"type": "function", "function": {"name": "shared_action", "parameters": {"type": "object", "properties": {}}}},
+            handler=self._h,
+        )]
+    async def _h(self): return "a"
+PLUGIN_CLASS = PlugA
+''')
 
-        class PluginB(Plugin):
-            name = "plug_b"
-            display_name = "B"
-            async def setup(self, config): pass
-            async def health_check(self): return True
-            def get_tools(self):
-                return [ToolDefinition(
-                    schema={"type": "function", "function": {"name": "shared_action", "parameters": {"type": "object", "properties": {}}}},
-                    handler=self._handler
-                )]
-            async def _handler(self): return "ok"
+        plug_b_dir = tmp_path / "plug_b"
+        plug_b_dir.mkdir()
+        (plug_b_dir / "__init__.py").write_text("")
+        (plug_b_dir / "plugin.py").write_text('''
+from src.plugins.base import Plugin, ToolDefinition
+class PlugB(Plugin):
+    name = "plug_b"
+    display_name = "B"
+    config_key = None
+    async def setup(self, config): pass
+    async def health_check(self): return True
+    def get_tools(self):
+        return [ToolDefinition(
+            schema={"type": "function", "function": {"name": "shared_action", "parameters": {"type": "object", "properties": {}}}},
+            handler=self._h,
+        )]
+    async def _h(self): return "b"
+PLUGIN_CLASS = PlugB
+''')
 
-        # Duplicate tool names should be detected and deduplicated
-        tools_a = PluginA().get_tools()
-        tools_b = PluginB().get_tools()
-        names = [t.schema["function"]["name"] for t in tools_a + tools_b]
-        assert names.count("shared_action") == 2  # both define it
+        registry = PluginRegistry()
+        sys.modules["src.plugins.registry"].discover_plugins = lambda dirs: discover_plugins([tmp_path])
+        try:
+            from src.config import settings
+            await registry.load_all(settings)
+        finally:
+            del sys.modules["src.plugins.registry"].discover_plugins
+
+        tools = registry.get_all_tools()
+        tool_names = [t.schema["function"]["name"] for t in tools]
+        assert len(tools) == 1
+        assert "shared_action" in tool_names

@@ -23,6 +23,7 @@ dependencies = [
     "kokoro>=0.9.2",
     "soundfile>=0.12.1",
     "edge-tts>=6.1.12",
+    "pydub>=0.25.1",
 
     # Voice — VAD + audio I/O
     "torch>=2.3.0",

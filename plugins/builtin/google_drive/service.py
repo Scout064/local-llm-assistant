@@ -5,8 +5,6 @@ from pathlib import Path
 
 import structlog
 
-from src.plugins.base import Plugin, ToolDefinition
-
 log = structlog.get_logger()
 
 
@@ -55,7 +53,10 @@ class GoogleDriveService:
     async def list_files(self, query: str = "") -> list[dict]:
         def _list():
             service = self._get_service()
-            q = f"name contains '{query}'" if query else None
+            q = None
+            if query:
+                escaped = query.replace("'", "\\'")
+                q = f"name contains '{escaped}'"
             results = service.files().list(q=q, pageSize=50).execute()
             return results.get("files", [])
         return await asyncio.to_thread(_list)

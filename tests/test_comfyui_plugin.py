@@ -139,9 +139,7 @@ class TestPatchWorkflow:
 
 
 class TestLoraAliasResolution:
-    """Test that LoRA aliases resolve correctly via plugin config."""
-
-    def test_alias_resolution(self):
+    def test_alias_resolution_from_settings(self):
         from src.config import settings
 
         loras = settings.plugins.comfyui.loras
@@ -162,3 +160,32 @@ class TestLoraAliasResolution:
                 result = lora.filename
                 break
         assert result == ""
+
+
+class TestPatchWorkflowEdgeCases:
+    def test_width_and_height_both_applied(self):
+        """Ensure both width AND height are patched (regression for duplicate key bug)."""
+        result = ComfyUIService.patch_workflow(
+            SAMPLE_WORKFLOW,
+            NODE_MAP_WITH_LORA,
+            {"prompt": "test", "width": 640, "height": 480},
+        )
+        assert result["5"]["inputs"]["width"] == 640
+        assert result["5"]["inputs"]["height"] == 480
+
+    def test_only_width_specified(self):
+        result = ComfyUIService.patch_workflow(
+            SAMPLE_WORKFLOW,
+            NODE_MAP_WITH_LORA,
+            {"prompt": "test", "width": 512},
+        )
+        assert result["5"]["inputs"]["width"] == 512
+        assert result["5"]["inputs"]["height"] == 1024  # unchanged
+
+    def test_seed_generated_when_not_specified(self):
+        result = ComfyUIService.patch_workflow(
+            SAMPLE_WORKFLOW,
+            NODE_MAP_WITH_LORA,
+            {"prompt": "test"},
+        )
+        assert isinstance(result["3"]["inputs"]["seed"], int)

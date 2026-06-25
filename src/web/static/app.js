@@ -56,10 +56,14 @@ async function loadMessages(conversationId) {
             try {
                 const data = JSON.parse(msg.content);
                 if (data.type === "image") {
-                    const imgEl = document.createElement("div");
-                    imgEl.className = "msg msg-assistant msg-image";
-                    imgEl.innerHTML = `<img src="${data.path}" alt="Generated image">`;
-                    container.appendChild(imgEl);
+                    const imgWrap = document.createElement("div");
+                    imgWrap.className = "msg msg-assistant msg-image";
+                    const img = document.createElement("img");
+                    img.src = data.path;
+                    img.alt = "Generated image";
+                    img.style.maxWidth = "100%";
+                    imgWrap.appendChild(img);
+                    container.appendChild(imgWrap);
                 }
             } catch {}
         }
@@ -122,12 +126,16 @@ function handleWsMessage(msg) {
             document.getElementById("messages").scrollTop = document.getElementById("messages").scrollHeight;
             break;
         case "image":
-            const container = document.getElementById("messages");
-            const imgDiv = document.createElement("div");
-            imgDiv.className = "msg msg-assistant msg-image";
-            imgDiv.innerHTML = `<img src="${msg.path}" alt="Generated image">`;
-            container.appendChild(imgDiv);
-            container.scrollTop = container.scrollHeight;
+            const imgContainer = document.getElementById("messages");
+            const imgWrap = document.createElement("div");
+            imgWrap.className = "msg msg-assistant msg-image";
+            const imgEl = document.createElement("img");
+            imgEl.src = msg.path;
+            imgEl.alt = "Generated image";
+            imgEl.style.maxWidth = "100%";
+            imgWrap.appendChild(imgEl);
+            imgContainer.appendChild(imgWrap);
+            imgContainer.scrollTop = imgContainer.scrollHeight;
             break;
         case "tool_start":
             app.currentAssistantEl = null;

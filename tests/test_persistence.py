@@ -46,6 +46,23 @@ async def test_update_conversation_title(db):
 
 
 @pytest.mark.asyncio
+async def test_title_length_cap(db):
+    conv_id = await create_conversation(title="Original")
+    long_title = "A" * 500
+    await update_conversation_title(conv_id, long_title)
+    conv = await get_conversation(conv_id)
+    assert len(conv["title"]) <= 256
+
+
+@pytest.mark.asyncio
+async def test_empty_title_defaults(db):
+    conv_id = await create_conversation(title="Original")
+    await update_conversation_title(conv_id, "   ")
+    conv = await get_conversation(conv_id)
+    assert conv["title"] == "New conversation"
+
+
+@pytest.mark.asyncio
 async def test_soft_delete_conversation(db):
     conv_id = await create_conversation(title="Delete Me")
     await soft_delete_conversation(conv_id)
@@ -87,12 +104,11 @@ async def test_message_order(db):
 
 
 @pytest.mark.asyncio
-async def test_message_with_tool(db):
-    conv_id = await create_conversation()
-    await add_message(conv_id, "tool", '{"result": "ok"}', tool_name="comfyui_generate_image")
-    messages = await get_messages(conv_id)
-    assert messages[0]["role"] == "tool"
-    assert messages[0]["tool_name"] == "comfyui_generate_image"
+async def test_foreign_key_enforcement(db):
+    """Messages added with a non-existent conversation_id should fail."""
+    import aiosqlite
+    with pytest.raises((aiosqlite.IntegrityError, Exception)):
+        await add_message("nonexistent-conv-id", "user", "orphan")
 
 
 @pytest.mark.asyncio

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import mimetypes
 from collections import defaultdict
 from pathlib import Path
 from typing import Set
@@ -30,20 +32,31 @@ logger = structlog.get_logger()
 router = APIRouter()
 
 websocket_connections: dict[str, Set[WebSocket]] = defaultdict(set)
+_conversation_locks: dict[str, asyncio.Lock] = {}
 
 STATIC_DIR = Path(__file__).parent / "static"
 
 API_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 
-async def verify_api_key(api_key: str = Security(API_KEY_HEADER)):
+async def verify_api_key(request: Request, api_key: str = Security(API_KEY_HEADER)):
     expected = settings.web.api_key
-    if expected and api_key != expected:
-        raise HTTPException(status_code=401, detail="Unauthorized")
+    if not expected:
+        return
+    query_key = request.query_params.get("key", "")
+    if api_key == expected or query_key == expected:
+        return
+    raise HTTPException(status_code=401, detail="Unauthorized")
 
 
 def _get_registry(request: Request) -> PluginRegistry:
     return request.app.state.registry
+
+
+def _get_conversation_lock(conversation_id: str) -> asyncio.Lock:
+    if conversation_id not in _conversation_locks:
+        _conversation_locks[conversation_id] = asyncio.Lock()
+    return _conversation_locks[conversation_id]
 
 
 @router.get("/", response_class=HTMLResponse)
@@ -102,6 +115,12 @@ async def websocket_endpoint(websocket: WebSocket, conversation_id: str):
             await websocket.close(code=4001, reason="Unauthorized")
             return
     await websocket.accept()
+
+    conv = await get_conversation(conversation_id)
+    if conv is None or conv.get("deleted_at"):
+        await websocket.close(code=4004, reason="Conversation not found")
+        return
+
     websocket_connections[conversation_id].add(websocket)
     registry = _get_registry(websocket.app)
     try:
@@ -119,24 +138,27 @@ async def websocket_endpoint(websocket: WebSocket, conversation_id: str):
                 text = msg.get("text", "")
                 await broadcast(conversation_id, {"type": "status", "state": "THINKING"})
 
-                async for event in run(conversation_id, text, registry):
-                    if isinstance(event, str):
-                        await broadcast(conversation_id, {"type": "chunk", "text": event})
-                    elif isinstance(event, AgentEvent):
-                        if event.type == "tool_start":
-                            await broadcast(conversation_id, {"type": "tool_start", "tool": event.tool})
-                        elif event.type == "tool_done":
-                            await broadcast(conversation_id, {"type": "tool_done", "tool": event.tool})
-                            try:
-                                result_data = json.loads(event.result) if event.result else {}
-                                if isinstance(result_data, dict) and result_data.get("type") == "image":
-                                    await broadcast(conversation_id, {
-                                        "type": "image",
-                                        "path": result_data.get("path", ""),
-                                        "prompt": result_data.get("prompt", ""),
-                                    })
-                            except (json.JSONDecodeError, TypeError):
-                                pass
+                async with _get_conversation_lock(conversation_id):
+                    async for event in run(conversation_id, text, registry):
+                        if isinstance(event, str):
+                            await broadcast(conversation_id, {"type": "chunk", "text": event})
+                            if settings.voice.enabled:
+                                asyncio.create_task(_feed_tts(event))
+                        elif isinstance(event, AgentEvent):
+                            if event.type == "tool_start":
+                                await broadcast(conversation_id, {"type": "tool_start", "tool": event.tool})
+                            elif event.type == "tool_done":
+                                await broadcast(conversation_id, {"type": "tool_done", "tool": event.tool})
+                                try:
+                                    result_data = json.loads(event.result) if event.result else {}
+                                    if isinstance(result_data, dict) and result_data.get("type") == "image":
+                                        await broadcast(conversation_id, {
+                                            "type": "image",
+                                            "path": result_data.get("path", ""),
+                                            "prompt": result_data.get("prompt", ""),
+                                        })
+                                except (json.JSONDecodeError, TypeError):
+                                    pass
 
                 await broadcast(conversation_id, {"type": "done"})
                 await broadcast(conversation_id, {"type": "status", "state": "IDLE"})
@@ -147,7 +169,7 @@ async def websocket_endpoint(websocket: WebSocket, conversation_id: str):
             elif msg_type == "new_conversation":
                 conv_id = await create_conversation()
                 conv = await get_conversation(conv_id)
-                await websocket.send_json({
+                await broadcast_global({
                     "type": "conversation_created",
                     "id": conv_id,
                     "title": conv["title"],
@@ -155,13 +177,21 @@ async def websocket_endpoint(websocket: WebSocket, conversation_id: str):
 
             elif msg_type == "clear_history":
                 await _clear_conversation_messages(conversation_id)
-                await websocket.send_json({"type": "history_cleared"})
+                await broadcast(conversation_id, {"type": "history_cleared"})
 
     except WebSocketDisconnect:
         websocket_connections[conversation_id].discard(websocket)
     except Exception as e:
         logger.error("websocket_error", error=str(e))
         websocket_connections[conversation_id].discard(websocket)
+
+
+async def _feed_tts(text_chunk: str):
+    try:
+        from src.voice.tts import synthesize_and_queue
+        await asyncio.to_thread(synthesize_and_queue, text_chunk)
+    except Exception as e:
+        logger.debug("tts_feed_error", error=str(e))
 
 
 async def _clear_conversation_messages(conversation_id: str):
@@ -192,9 +222,8 @@ async def broadcast_global(message: dict):
             websocket_connections.get(conv_id, set()).discard(ws)
 
 
-@router.get("/output/images/{filename}")
+@router.get("/output/images/{filename}", dependencies=[Depends(verify_api_key)])
 async def serve_image(filename: str):
-    import mimetypes
     output_dir = Path(settings.plugins.comfyui.output_dir).resolve()
     image_path = (output_dir / filename).resolve()
     try:
